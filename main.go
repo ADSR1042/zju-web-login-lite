@@ -4,8 +4,8 @@ import (
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/sha1"
-	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -14,13 +14,18 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 )
 
 const N = "200"
 const TYPE = "1"
 const ENC = "srun_bx1"
+const _ALPHA = "LVoJPiCN2R8G90yg+hmFHuacZ1OWMnrsSTXkYpUq/3dlbfKwv6xztjI7DeBE45QA"
+const _PADCHAR = "="
 
 // basic info
 var action string
@@ -30,8 +35,12 @@ var ip = ""
 var loginUrl = "https://net.zju.edu.cn"
 
 // login params
-var ac_id string
+var acId string
 var randNumStr string
+var token string
+var info string
+var hmd5 string
+var chksum string
 
 func main() {
 
@@ -76,6 +85,8 @@ func main() {
 	client := &http.Client{}
 
 	initConnection(client, initUrl)
+	getToken(client, getChallengeApi)
+	preprocess()
 	// Now you can use client to send HTTP requests
 	// For example:
 	//_, err = client.Get(initUrl.String())
@@ -163,13 +174,38 @@ func get_xencode(msg string, key string) string {
 	return lencode(pwd, false)
 }
 
-func getBase64(s string) string {
-	_ALPHA := "LVoJPiCN2R8G90yg+hmFHuacZ1OWMnrsSTXkYpUq/3dlbfKwv6xztjI7DeBE45QA"
-	//_PADCHAR := "="
-	var Encoder *base64.Encoding = base64.NewEncoding(_ALPHA)
-	return Encoder.EncodeToString([]byte(s))
+func getByte(s string, i int) int {
+	x := int(s[i])
+	if x > 255 {
+		fmt.Println("INVALID_CHARACTER_ERR: DOM Exception 5")
+		os.Exit(0)
+	}
+	return x
 }
 
+func getBase64(s string) string {
+	var x []string
+	imax := len(s) - len(s)%3
+	if len(s) == 0 {
+		return s
+	}
+	for i := 0; i < imax; i += 3 {
+		b10 := (getByte(s, i) << 16) | (getByte(s, i+1) << 8) | getByte(s, i+2)
+		x = append(x, string(_ALPHA[b10>>18]))
+		x = append(x, string(_ALPHA[(b10>>12)&63]))
+		x = append(x, string(_ALPHA[(b10>>6)&63]))
+		x = append(x, string(_ALPHA[b10&63]))
+	}
+	i := imax
+	if len(s)-imax == 1 {
+		b10 := getByte(s, i) << 16
+		x = append(x, string(_ALPHA[b10>>18])+string(_ALPHA[(b10>>12)&63])+_PADCHAR+_PADCHAR)
+	} else if len(s)-imax == 2 {
+		b10 := (getByte(s, i) << 16) | (getByte(s, i+1) << 8)
+		x = append(x, string(_ALPHA[b10>>18])+string(_ALPHA[(b10>>12)&63])+string(_ALPHA[(b10>>6)&63])+_PADCHAR)
+	}
+	return strings.Join(x, "")
+}
 func getMD5(password, token string) string {
 	key := []byte(token)
 	message := []byte(password)
@@ -189,6 +225,31 @@ func getSha1(s string) string {
 	//返回加密结果
 	return hex.EncodeToString(h.Sum(nil))
 
+}
+
+type Info struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Ip       string `json:"ip"`
+	Acid     string `json:"acid"`
+	EncVer   string `json:"enc_ver"`
+}
+
+func getInfo() string {
+	info_temp := &Info{
+		Username: username,
+		Password: password,
+		Ip:       ip,
+		Acid:     acId,
+		EncVer:   ENC,
+	}
+
+	jsonBytes, err := json.Marshal(info_temp)
+	if err != nil {
+		panic(err)
+	}
+
+	return string(jsonBytes)
 }
 
 func initConnection(client *http.Client, initUrl *url.URL) {
@@ -216,7 +277,7 @@ func initConnection(client *http.Client, initUrl *url.URL) {
 		fmt.Println("acIDMatch error:", acIDMatch)
 		return
 	}
-	ac_id = acIDMatch[1]
+	acId = acIDMatch[1]
 	if len(ipMatch) < 2 {
 		fmt.Println("ipMatch error:", ipMatch)
 		return
@@ -235,7 +296,57 @@ func initConnection(client *http.Client, initUrl *url.URL) {
 	// Convert the big.Int to a string
 	randNumStr = randNum.String()
 
-	fmt.Println("ac_id:", ac_id, "ip:", ip, "randNum:", randNumStr)
+	fmt.Println("ac_id:", acId, "ip:", ip, "randNum:", randNumStr)
 	fmt.Println("zju-web-login init success")
 
+}
+
+func getToken(client *http.Client, getChallengeApi *url.URL) {
+	v := url.Values{}
+	v.Set("callback", "jQuery"+randNumStr+"_"+strconv.FormatInt(time.Now().UnixNano()/1e6, 10))
+	v.Set("username", username)
+	v.Set("ip", ip)
+	v.Set("_", strconv.FormatInt(time.Now().UnixNano()/1e6, 10))
+
+	getChallengeApi.RawQuery = v.Encode()
+	resp, err := client.Get(getChallengeApi.String())
+	if err != nil {
+		fmt.Println(err)
+		token = ""
+	}
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			panic(err)
+		}
+	}(resp.Body)
+
+	body, _ := io.ReadAll(resp.Body)
+	re := regexp.MustCompile(`"challenge":"(.*?)"`)
+	matches := re.FindStringSubmatch(string(body))
+	if len(matches) > 0 {
+		token = matches[1]
+		fmt.Println("token: " + token)
+	}
+}
+
+func get_chksum() string {
+	chkstr := token + username
+	chkstr += token + hmd5
+	chkstr += token + acId
+	chkstr += token + ip
+	chkstr += token + N
+	chkstr += token + TYPE
+	chkstr += token + info
+	return chkstr
+}
+
+func preprocess() {
+	info = getInfo()
+	temp1 := get_xencode(info, token)
+	temp2 := getBase64(temp1)
+	fmt.Println(temp2)
+	info = "{SRBX1}" + getBase64(get_xencode(info, token))
+	hmd5 = getMD5(password, token)
+	chksum = getSha1(get_chksum())
 }
