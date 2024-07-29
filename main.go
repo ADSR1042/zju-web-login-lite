@@ -27,22 +27,22 @@ const ENC = "srun_bx1"
 const _ALPHA = "LVoJPiCN2R8G90yg+hmFHuacZ1OWMnrsSTXkYpUq/3dlbfKwv6xztjI7DeBE45QA"
 const _PADCHAR = "="
 
-// basic info
-var action string
-var username string
-var password string
-var ip = ""
-var loginUrl = "https://net.zju.edu.cn"
-
-// login params
-var acId string
-var randNumStr string
-var token string
-var info string
-var hmd5 string
-var chksum string
-
 func main() {
+
+	// basic info
+	var action string
+	var username string
+	var password string
+	var ip = ""
+	var loginUrl = "https://net.zju.edu.cn"
+
+	// login params
+	var acId string
+	var randNumStr string
+	var token string
+	var info string
+	var hmd5 string
+	var chksum string
 
 	flag.StringVar(&action, "a", "login", "login or logout or hold")
 	flag.StringVar(&username, "u", "", "username")
@@ -84,13 +84,13 @@ func main() {
 
 	client := &http.Client{}
 
-	initConnection(client, initUrl)
-	getToken(client, getChallengeApi)
-	preprocess()
-	login(client, srunPortalApi)
+	acId, ip, randNumStr = initConnection(client, initUrl)
+	token = getToken(client, getChallengeApi, username, ip, randNumStr)
+	info, hmd5, chksum = preprocess(username, password, acId, ip, token)
+	login(client, srunPortalApi, username, hmd5, acId, ip, info, N, TYPE, randNumStr, chksum)
 	//等待1min
 	//time.Sleep(1 * time.Minute)
-	//logout(client, radUserDmApi)
+	//logout(client, radUserDmApi, username, ip, randNumStr)
 
 	// Now you can use client to send HTTP requests
 	// For example:
@@ -241,7 +241,7 @@ type Info struct {
 	EncVer   string `json:"enc_ver"`
 }
 
-func getInfo() string {
+func getInfo(username string, password string, ip string, acId string) string {
 	info_temp := &Info{
 		Username: username,
 		Password: password,
@@ -258,7 +258,10 @@ func getInfo() string {
 	return string(jsonBytes)
 }
 
-func initConnection(client *http.Client, initUrl *url.URL) {
+func initConnection(client *http.Client, initUrl *url.URL) (string, string, string) {
+	var acId string
+	var ip string
+	var randNumStr string
 	fmt.Println("zju-web-login init")
 	initRes, _ := client.Get(initUrl.String())
 	defer func(Body io.ReadCloser) {
@@ -281,12 +284,12 @@ func initConnection(client *http.Client, initUrl *url.URL) {
 	//second element is the match
 	if len(acIDMatch) < 2 {
 		fmt.Println("acIDMatch error:", acIDMatch)
-		return
+		panic("acIDMatch error")
 	}
 	acId = acIDMatch[1]
 	if len(ipMatch) < 2 {
 		fmt.Println("ipMatch error:", ipMatch)
-		return
+		panic("ipMatch error")
 	}
 	ip = ipMatch[1]
 
@@ -304,10 +307,12 @@ func initConnection(client *http.Client, initUrl *url.URL) {
 
 	fmt.Println("ac_id:", acId, "ip:", ip, "randNum:", randNumStr)
 	fmt.Println("zju-web-login init success")
+	return acId, ip, randNumStr
 
 }
 
-func getToken(client *http.Client, getChallengeApi *url.URL) {
+func getToken(client *http.Client, getChallengeApi *url.URL, username string, ip string, randNumStr string) string {
+	var token string
 	v := url.Values{}
 	v.Set("callback", "jQuery"+randNumStr+"_"+strconv.FormatInt(time.Now().UnixNano()/1e6, 10))
 	v.Set("username", username)
@@ -334,9 +339,10 @@ func getToken(client *http.Client, getChallengeApi *url.URL) {
 		token = matches[1]
 		fmt.Println("token: " + token)
 	}
+	return token
 }
 
-func get_chksum() string {
+func get_chksum(token string, username string, hmd5 string, acId string, ip string, info string) string {
 	chkstr := token + username
 	chkstr += token + hmd5
 	chkstr += token + acId
@@ -347,17 +353,21 @@ func get_chksum() string {
 	return chkstr
 }
 
-func preprocess() {
-	info = getInfo()
+func preprocess(username string, password string, acId string, ip string, token string) (string, string, string) {
+	var info string
+	var hmd5 string
+	var chksum string
+	info = getInfo(username, password, ip, acId)
 	temp1 := get_xencode(info, token)
 	temp2 := getBase64(temp1)
 	fmt.Println(temp2)
 	info = "{SRBX1}" + getBase64(get_xencode(info, token))
 	hmd5 = getMD5(password, token)
-	chksum = getSha1(get_chksum())
+	chksum = getSha1(get_chksum(token, username, hmd5, acId, ip, info))
+	return info, hmd5, chksum
 }
 
-func login(client *http.Client, srunPortalApi *url.URL) {
+func login(client *http.Client, srunPortalApi *url.URL, username string, hmd5 string, acId string, ip string, info string, N string, TYPE string, randNumStr string, chksum string) {
 	v := url.Values{}
 	v.Set("callback", "jQuery"+randNumStr+"_"+strconv.FormatInt(time.Now().UnixNano()/1e6, 10))
 	v.Set("action", "login")
@@ -395,7 +405,7 @@ func login(client *http.Client, srunPortalApi *url.URL) {
 
 }
 
-func logout(client *http.Client, srunPortalApi *url.URL) {
+func logout(client *http.Client, srunPortalApi *url.URL, username string, ip string, randNumStr string) {
 	currentTime := int(time.Now().Unix())
 	// Generating the SHA-1 hash
 	sign := getSha1(strconv.Itoa(currentTime) + username + ip + "1" + strconv.Itoa(currentTime))
