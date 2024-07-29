@@ -88,6 +88,10 @@ func main() {
 	getToken(client, getChallengeApi)
 	preprocess()
 	login(client, srunPortalApi)
+	//等待1min
+	//time.Sleep(1 * time.Minute)
+	//logout(client, radUserDmApi)
+
 	// Now you can use client to send HTTP requests
 	// For example:
 	//_, err = client.Get(initUrl.String())
@@ -389,4 +393,36 @@ func login(client *http.Client, srunPortalApi *url.URL) {
 		fmt.Println("[Already Online]")
 	}
 
+}
+
+func logout(client *http.Client, srunPortalApi *url.URL) {
+	currentTime := int(time.Now().Unix())
+	// Generating the SHA-1 hash
+	sign := getSha1(strconv.Itoa(currentTime) + username + ip + "1" + strconv.Itoa(currentTime))
+	v := url.Values{}
+	v.Set("callback", "jQuery"+randNumStr+"_"+strconv.FormatInt(time.Now().UnixNano()/1e6, 10))
+	v.Set("unbind", "1")
+	v.Set("username", username)
+	v.Set("ip", ip)
+	v.Set("time", strconv.FormatInt(time.Now().UnixNano()/1e9, 10))
+	v.Set("sign", sign)
+	v.Set("_", strconv.FormatInt(time.Now().UnixNano()/1e6, 10))
+	srunPortalApi.RawQuery = v.Encode()
+	resp, err := client.Get(srunPortalApi.String())
+	if err != nil {
+		fmt.Println(err)
+	}
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			panic(err)
+		}
+	}(resp.Body)
+	body, _ := io.ReadAll(resp.Body)
+	resText := string(body)
+	if strings.Contains(resText, "logout_ok") {
+		fmt.Println("[Logout Successful]")
+	} else {
+		fmt.Println("[Logout Failed]")
+	}
 }
