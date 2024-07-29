@@ -87,6 +87,7 @@ func main() {
 	initConnection(client, initUrl)
 	getToken(client, getChallengeApi)
 	preprocess()
+	login(client, srunPortalApi)
 	// Now you can use client to send HTTP requests
 	// For example:
 	//_, err = client.Get(initUrl.String())
@@ -126,14 +127,14 @@ func lencode(msg []int, key bool) string {
 		}
 		ll = m
 	}
-	result := ""
+	result := make([]byte, 0, l*4)
 	for i := 0; i < l; i++ {
-		result += fmt.Sprintf("%c", msg[i]&0xff) + fmt.Sprintf("%c", msg[i]>>8&0xff) + fmt.Sprintf("%c", msg[i]>>16&0xff) + fmt.Sprintf("%c", msg[i]>>24&0xff)
+		result = append(result, byte(msg[i]&0xff), byte(msg[i]>>8&0xff), byte(msg[i]>>16&0xff), byte(msg[i]>>24&0xff))
 	}
 	if key {
-		return result[:ll]
+		return string(result[:ll])
 	}
-	return result
+	return string(result)
 }
 
 func get_xencode(msg string, key string) string {
@@ -206,6 +207,7 @@ func getBase64(s string) string {
 	}
 	return strings.Join(x, "")
 }
+
 func getMD5(password, token string) string {
 	key := []byte(token)
 	message := []byte(password)
@@ -349,4 +351,42 @@ func preprocess() {
 	info = "{SRBX1}" + getBase64(get_xencode(info, token))
 	hmd5 = getMD5(password, token)
 	chksum = getSha1(get_chksum())
+}
+
+func login(client *http.Client, srunPortalApi *url.URL) {
+	v := url.Values{}
+	v.Set("callback", "jQuery"+randNumStr+"_"+strconv.FormatInt(time.Now().UnixNano()/1e6, 10))
+	v.Set("action", "login")
+	v.Set("username", username)
+	v.Set("password", "{MD5}"+hmd5)
+	v.Set("ac_id", acId)
+	v.Set("ip", ip)
+	v.Set("chksum", chksum)
+	v.Set("info", info)
+	v.Set("n", N)
+	v.Set("type", TYPE)
+	v.Set("os", "Windows+10")
+	v.Set("name", "windows")
+	v.Set("double_stack", "0")
+	v.Set("_", strconv.FormatInt(time.Now().UnixNano()/1e6, 10))
+
+	srunPortalApi.RawQuery = v.Encode()
+	resp, err := client.Get(srunPortalApi.String())
+	if err != nil {
+		fmt.Println(err)
+	}
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			panic(err)
+		}
+	}(resp.Body)
+	body, _ := io.ReadAll(resp.Body)
+	resText := string(body)
+	if strings.Contains(resText, "E0000") {
+		fmt.Println("[Login Successful]")
+	} else if strings.Contains(resText, "ip_already_online_error") {
+		fmt.Println("[Already Online]")
+	}
+
 }
